@@ -46,6 +46,10 @@ docker compose down      # keeps the pgdata + uploads volumes
 
 ## API reference
 
+A ready-to-import Postman collection covering every route below (with request/response
+examples, validation rules, and auth-token bookkeeping scripts) lives in
+[`postman/`](postman/README.md).
+
 All routes are mounted under `/api`, require `Authorization: Bearer <accessToken>`
 unless noted, and return the envelope in `src/lib/response.ts`
 (`{ status, message, data, app_version }` / `{ status:false, message, error, trace_id }`).
