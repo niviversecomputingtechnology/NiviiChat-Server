@@ -1,0 +1,615 @@
+{
+  "info": {
+    "_postman_id": "a1e3c2b0-6d4f-4a8e-9c1a-nivichat00001",
+    "name": "NiviChat Backend API",
+    "description": "# NiviChat Backend\n\nFastify REST API for the NiviChat mobile client. A separate WebSocket process (`ws-server.js`, default port `8080`) handles real-time delivery, typing, presence, and call signaling — see the **WebSocket Reference** folder at the bottom of this collection for its event protocol; Postman requests only cover the REST surface.\n\n## Response envelope\n\nEvery endpoint returns one of these two shapes — never a bare object/array:\n\n**Success**\n```json\n{ \"status\": true, \"message\": \"OK\", \"data\": { ... }, \"app_version\": \"2.0.11\" }\n```\n\n**Error**\n```json\n{ \"status\": false, \"message\": \"Invalid credentials\", \"error\": null, \"trace_id\": \"6f2b...\" }\n```\n\n`trace_id` is the Fastify request id. You can force it yourself by sending an `x-trace-id` header; otherwise the server generates one.\n\n## Auth flow\n\n1. `POST /api/auth/register` or `POST /api/auth/login` — both return `{ accessToken, refreshToken, user }`.\n2. Send `accessToken` as `Authorization: Bearer <token>` on every protected route (this collection does that automatically via the collection-level Bearer auth + the `{{accessToken}}` variable).\n3. Access tokens are short-lived (5 minutes by default, `JWT_ACCESS_EXPIRES_IN`). When one expires you'll get **401** (never 403) — call `POST /api/auth/refresh-token` with the stored `refreshToken` to get a new pair. Refresh tokens rotate: the old one is revoked the moment you use it.\n4. `POST /api/auth/logout` revokes a refresh token.\n\n**This collection automates step 2–3's bookkeeping**: the Login, Register, and Refresh Token requests each carry a test script that saves `accessToken` / `refreshToken` / `userId` into collection variables, so every other request just works after you run one of them. Requests that also produce a `chatId`, `messageId`, or `groupId` you'll need later (List Chats, Send Message, Create Group) save those too.\n\n## Setup\n\n1. Import this collection **and** the companion `NiviChat-Local.postman_environment.json`.\n2. Select the **NiviChat Local** environment in Postman's top-right environment picker.\n3. If your server isn't on `http://localhost:3000`, edit the environment's `baseUrl` variable.\n4. Run **Auth → Login** (the seed script creates `alice@nivichat.dev` / `bob@nivichat.dev` / `carol@nivichat.dev`, all with password `Password123!`, if you've run `npm run prisma:seed`). Everything else in the collection is now authenticated automatically.\n\n## Pagination\n\nList endpoints (`GET /api/chats/:id` messages, `GET /api/calls`) are cursor-based: pass the previous response's `nextCursor` as `?cursor=` to fetch the next page. `nextCursor` is `null` when there's nothing more.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "event": [],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000", "type": "string" },
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "refreshToken", "value": "", "type": "string" },
+    { "key": "userId", "value": "", "type": "string" },
+    { "key": "otherUserId", "value": "", "type": "string", "description": "Set this to a second seeded user's id (e.g. bob) before running Create Direct Chat / Create Group — Users → Search Users returns ids you can copy in." },
+    { "key": "chatId", "value": "", "type": "string" },
+    { "key": "messageId", "value": "", "type": "string" },
+    { "key": "groupId", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "description": "Unauthenticated liveness check. Not part of `/api` — useful for confirming the server is reachable before debugging auth issues.",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/", "host": ["{{baseUrl}}"], "path": [""] },
+            "description": "Returns `{ ok: true, service: \"nivichat-backend\" }` outside the standard envelope (this is the one route that isn't under `/api`)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "description": "Registration, login, token refresh, logout. Register and Login are the only two ways to obtain an access/refresh token pair.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"newuser\",\n  \"email\": \"newuser@nivichat.dev\",\n  \"password\": \"Password123!\",\n  \"name\": \"New User\",\n  \"avatarUrl\": null,\n  \"deviceUniqueId\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] },
+            "description": "Create a new account. No auth required.\n\n**Body**\n| Field | Type | Rules |\n|---|---|---|\n| `username` | string | 3-32 chars, `[a-zA-Z0-9_.]` only, unique |\n| `email` | string | valid email, unique |\n| `password` | string | 8-128 chars |\n| `name` | string | 1-80 chars |\n| `avatarUrl` | string? | valid URL |\n| `deviceUniqueId` | string? | for push/device tracking |\n\n**Response `201`**: `{ accessToken, refreshToken, user }` — `user` never includes `passwordHash`.\n\n**Errors**: `409` if the email or username is already taken; `422` on validation failure."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', data.refreshToken);",
+                  "  pm.collectionVariables.set('userId', data.user.id);",
+                  "}",
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Envelope has status:true', () => pm.expect(pm.response.json().status).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"alice@nivichat.dev\",\n  \"password\": \"Password123!\",\n  \"deviceUniqueId\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] },
+            "description": "Log in with either email or username. No auth required.\n\n**Body**\n| Field | Type | Notes |\n|---|---|---|\n| `identifier` | string | email OR username |\n| `password` | string | |\n| `deviceUniqueId` | string? | if set, updates the user's stored device id |\n\nMarks the user online (`isOnline: true`, `lastSeenAt: now`) as a side effect — this is independent of WebSocket presence, which tracks live socket connections separately.\n\n**Response `200`**: `{ accessToken, refreshToken, user }`.\n\n**Errors**: `401 \"Invalid credentials\"` for a wrong identifier/password (deliberately doesn't reveal which one was wrong)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', data.refreshToken);",
+                  "  pm.collectionVariables.set('userId', data.user.id);",
+                  "}",
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returned an accessToken', () => pm.expect(pm.response.json().data.accessToken).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/refresh-token", "host": ["{{baseUrl}}"], "path": ["api", "auth", "refresh-token"] },
+            "description": "Rotates a refresh token: the one you send is revoked and a brand-new access/refresh pair is issued. Call this when a protected request comes back `401` because the access token expired.\n\n**Body**: `{ refreshToken }` — no `Authorization` header needed, the refresh token itself is the credential.\n\n**Response `200`**: `{ accessToken, refreshToken }` (no `user` object this time).\n\n**Errors**: `401` if the refresh token is invalid, expired, or already revoked (e.g. reused after a prior refresh, or after logout)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', data.refreshToken);",
+                  "}",
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/logout", "host": ["{{baseUrl}}"], "path": ["api", "auth", "logout"] },
+            "description": "Revokes the given refresh token so it can no longer be used to mint new access tokens. Requires a valid (still-live) access token in `Authorization`.\n\n**Body**: `{ refreshToken }`.\n\n**Response `200`**: `data: null`.\n\nNote: this only revokes the one refresh token you pass — if the client is logged in on multiple devices, each device's refresh token must be revoked separately (or you track/revoke them server-side by user if you need a global \"log out everywhere\")."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "description": "Current-profile management and user lookup/search. Every route here requires auth.",
+      "item": [
+        {
+          "name": "Get Current User (Me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/users/me", "host": ["{{baseUrl}}"], "path": ["api", "users", "me"] },
+            "description": "Returns the caller's own profile, resolved from the access token's `sub` claim.\n\n**Response `200`**: `PublicUser` — `{ id, username, email, name, avatarUrl, bio, isVerified, isOnline, lastSeenAt, createdAt }`. Never includes `passwordHash`."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Current User (Me)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Alice J.\",\n  \"bio\": \"Product designer, coffee enthusiast\",\n  \"avatarUrl\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/users/me", "host": ["{{baseUrl}}"], "path": ["api", "users", "me"] },
+            "description": "Partial update of the caller's own profile — omit any field you don't want to change. Send `null` explicitly to clear `avatarUrl`/`bio`.\n\n**Body** (all optional)\n| Field | Type | Rules |\n|---|---|---|\n| `name` | string | 1-80 chars |\n| `avatarUrl` | string \\| null | valid URL |\n| `bio` | string \\| null | max 280 chars |\n\n**Response `200`**: updated `PublicUser`."
+          },
+          "response": []
+        },
+        {
+          "name": "Search Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/users?query=bob&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "users"],
+              "query": [
+                { "key": "query", "value": "bob", "description": "Matched case-insensitively against username, name, and email. Omit to list all users (excluding yourself)." },
+                { "key": "limit", "value": "20", "description": "1-50, default 20" }
+              ]
+            },
+            "description": "Search for users to start a chat with (the mobile client's \"Add Chat\" screen). Always excludes the caller.\n\nCopy an id from the response into the `otherUserId` collection variable to use it in **Chats → Create Direct Chat** or **Groups → Create Group**.\n\n**Response `200`**: `PublicUser[]`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const users = pm.response.json().data;",
+                  "  if (users.length > 0) pm.collectionVariables.set('otherUserId', users[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get User By Id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/users/{{otherUserId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "users", "{{otherUserId}}"]
+            },
+            "description": "Public profile lookup by id — e.g. tapping a participant's avatar inside a chat.\n\n**Response `200`**: `PublicUser`.\n\n**Errors**: `404` if the id doesn't exist."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Chats",
+      "description": "List/create chats, view a chat's message history, and pin/mute/archive/leave. A \"chat\" is either a DIRECT (1:1) or GROUP conversation — group metadata (name, members, roles) lives under the Groups folder; this is the shared messaging container both types sit on top of.",
+      "item": [
+        {
+          "name": "List Chats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/chats?includeArchived=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chats"],
+              "query": [
+                { "key": "includeArchived", "value": "false", "description": "true | false. Defaults to excluding archived chats." }
+              ]
+            },
+            "description": "Lists every chat the caller participates in, pinned chats first, then most-recently-updated. Shaped to match the mobile client's `ChatListItem[]` directly.\n\nEach item includes: `id`, `type` (`DIRECT`/`GROUP`), `name` and `avatarUrl` (resolved from the other participant for DIRECT, or the Group for GROUP), `otherUser` (DIRECT only, else `null`), `groupId` (GROUP only, else `null`), `isPinned`/`isMuted`/`isArchived`/`unreadCount` (per-participant state), `lastMessage` (summary, or `null` for an empty chat), `participantCount`, `createdAt`, `updatedAt`.\n\n**Response `200`**: `ChatListItem[]`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const chats = pm.response.json().data;",
+                  "  if (chats.length > 0) pm.collectionVariables.set('chatId', chats[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Direct Chat",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{otherUserId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/chats", "host": ["{{baseUrl}}"], "path": ["api", "chats"] },
+            "description": "Creates a DIRECT chat with another user, or returns the existing one if the pair already has one — idempotent by participant pair, so this is always safe to call from an \"Add Chat\" flow without checking first.\n\nRun **Users → Search Users** first to populate `{{otherUserId}}`.\n\n**Body**: `{ userId }` — the other participant's id.\n\n**Response**: `201` (created) or `200` (already existed) with the resulting `ChatListItem`.\n\n**Errors**: `400` if `userId` is your own id; `404` if that user doesn't exist."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([200, 201].includes(pm.response.code)) {",
+                  "  pm.collectionVariables.set('chatId', pm.response.json().data.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Chat Detail + Messages",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/chats/{{chatId}}?limit=30",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chats", "{{chatId}}"],
+              "query": [
+                { "key": "limit", "value": "30", "description": "1-100, default 30" },
+                { "key": "cursor", "value": "", "description": "A message id from a previous page's nextCursor — fetches older messages.", "disabled": true }
+              ]
+            },
+            "description": "Chat header (same identity fields as a `ChatListItem`, plus the full `participants` list) + a cursor-paginated page of messages, newest page first. As a side effect, marks the chat read for the caller (`unreadCount` reset to 0, `lastReadAt` updated) — calling this endpoint IS \"opening the chat\" from the client's perspective.\n\n**Query**: `cursor` (optional, a message id — paginate older messages), `limit` (1-100, default 30).\n\n**Response `200`**: `{ chat, messages: MessageDTO[], nextCursor }`. `nextCursor` is `null` once you've reached the oldest message.\n\n**Errors**: `404` if you're not a participant of this chat (same response whether the chat doesn't exist or you're just not in it, to avoid leaking existence)."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Chat (Pin / Mute / Archive)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isPinned\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/chats/{{chatId}}", "host": ["{{baseUrl}}"], "path": ["api", "chats", "{{chatId}}"] },
+            "description": "Updates the caller's own per-chat state — pin/mute/archive are per-participant, not global to the chat (muting a group only silences it for you).\n\n**Body** (send at least one)\n| Field | Type |\n|---|---|\n| `isPinned` | boolean |\n| `isMuted` | boolean |\n| `isArchived` | boolean |\n\n**Response `200`**: `{ isPinned, isMuted, isArchived }`."
+          },
+          "response": []
+        },
+        {
+          "name": "Leave / Delete Chat",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/chats/{{chatId}}", "host": ["{{baseUrl}}"], "path": ["api", "chats", "{{chatId}}"] },
+            "description": "Removes the caller from this chat. If you were the last remaining participant, the chat (and its messages) is deleted outright.\n\nFor a GROUP chat this is equivalent to leaving the group as an ordinary member — if you're the group's only admin, prefer **Groups → Disband Group** or promote someone else first, since this endpoint doesn't reassign the admin role.\n\n**Response `200`**: `data: null`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "description": "Send, fetch, edit, and delete messages, plus per-recipient read-receipt status. Sending here (REST) and sending over the WebSocket's `message:send` event both go through the same persistence path and both broadcast `message:new` — use whichever fits your client better.",
+      "item": [
+        {
+          "name": "Send Message",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chatId\": \"{{chatId}}\",\n  \"type\": \"TEXT\",\n  \"text\": \"Hello from Postman!\",\n  \"replyToId\": null,\n  \"attachments\": []\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/messages", "host": ["{{baseUrl}}"], "path": ["api", "messages"] },
+            "description": "Sends a message into a chat you participate in. Persists it, creates a `SENT` receipt for every other participant, bumps the chat's `updatedAt` and their `unreadCount`, and broadcasts `message:new` over WebSocket to every connected participant (including your own other devices).\n\n**Body**\n| Field | Type | Rules |\n|---|---|---|\n| `chatId` | string | required |\n| `type` | enum | `TEXT` \\| `IMAGE` \\| `AUDIO` \\| `FILE` \\| `VIDEO` \\| `VIDEO_CALL` \\| `VOICE_CALL`, default `TEXT` |\n| `text` | string? | 1-4000 chars; **required if `type` is `TEXT`** |\n| `replyToId` | string? | must be a message id already in this chat |\n| `attachments` | array? | max 10, see shape below — upload each file via `POST /api/attachments` first and pass its returned `url`/`type`/etc. here |\n\nEach `attachments[]` entry: `{ type: IMAGE\\|AUDIO\\|FILE\\|VIDEO, url, fileName?, fileSize?, width?, height?, duration?, waveform?, thumbnail? }`.\n\n**Response `201`**: full `MessageDTO` (`{ id, chatId, senderId, sender, type, text, replyToId, isEdited, editedAt, isDeleted, deletedAt, createdAt, attachments, reactions }`).\n\n**Errors**: `404` if you're not a participant; `400` if `replyToId` points to a message in a different chat."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.collectionVariables.set('messageId', pm.response.json().data.id);",
+                  "}",
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Message By Id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/messages/{{messageId}}", "host": ["{{baseUrl}}"], "path": ["api", "messages", "{{messageId}}"] },
+            "description": "Fetches a single message. You must be a participant of the chat it belongs to.\n\n**Response `200`**: `MessageDTO`.\n\n**Errors**: `404` if the message doesn't exist or you're not in its chat."
+          },
+          "response": []
+        },
+        {
+          "name": "Edit Message",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"edit\",\n  \"text\": \"Hello from Postman! (edited)\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/messages/{{messageId}}", "host": ["{{baseUrl}}"], "path": ["api", "messages", "{{messageId}}"] },
+            "description": "This one endpoint (`PATCH /api/messages/:id`) handles three different actions via the `action` discriminator — this request shows `edit`; see **Delete Message (via action)** and **Update Message Receipt Status** for the other two. Only the original sender can edit or delete; sets `isEdited: true` and stamps `editedAt`. Broadcasts `message:update` over WebSocket (an extension beyond the documented WS event set, added so real-time clients see edits/deletes too).\n\n**Body**: `{ action: \"edit\", text }` — `text` 1-4000 chars.\n\n**Response `200`**: updated `MessageDTO`.\n\n**Errors**: `403` if you're not the sender; `400` if the message was already deleted."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Message (via action)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"delete\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/messages/{{messageId}}", "host": ["{{baseUrl}}"], "path": ["api", "messages", "{{messageId}}"] },
+            "description": "Soft-deletes the message (`isDeleted: true`, `text` cleared) via the same action-discriminated PATCH as Edit. The row is kept (so replies referencing it don't break), just its content is cleared. Only the sender can do this.\n\nSee also **Delete Message (plain DELETE)** below — a REST-idiomatic alias for clients that prefer a plain `DELETE` verb over `PATCH` + `action`. Both do exactly the same thing.\n\n**Body**: `{ action: \"delete\" }`.\n\n**Response `200`**: the now soft-deleted `MessageDTO` (`text: null`, `isDeleted: true`)."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Message Receipt Status",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"status\",\n  \"status\": \"SEEN\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/messages/{{messageId}}", "host": ["{{baseUrl}}"], "path": ["api", "messages", "{{messageId}}"] },
+            "description": "Upserts **your own** delivery/read receipt for this message — unlike edit/delete, this doesn't require being the sender (it's the recipient reporting their own status). This is the REST equivalent of the WebSocket `message:read` event, useful for clients that aren't holding a live socket.\n\n**Body**: `{ action: \"status\", status }` — `status` one of `SENDING` \\| `SENT` \\| `DELIVERED` \\| `SEEN` \\| `READ` \\| `MISSED`.\n\n**Response `200`**: the `MessageReceipt` row `{ id, messageId, userId, status, updatedAt }`."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Message (plain DELETE)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/messages/{{messageId}}", "host": ["{{baseUrl}}"], "path": ["api", "messages", "{{messageId}}"] },
+            "description": "Plain-REST alias for `PATCH { action: \"delete\" }` — same soft-delete behavior, sender-only. Prefer this if your HTTP client library makes `DELETE` more natural than a discriminated `PATCH` body.\n\n**Response `200`**: `data: null` (or `\"Message already deleted\"` if it already was — this call is idempotent)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Groups",
+      "description": "Group chat creation and membership management. Every GROUP chat has a backing Chat row (see the Chats folder for messaging on it) plus this Group/GroupMember metadata for name/avatar/description/roles.",
+      "item": [
+        {
+          "name": "Create Group",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Test Group\",\n  \"avatarUrl\": null,\n  \"description\": \"Created from the Postman collection\",\n  \"memberIds\": [\"{{otherUserId}}\"]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/groups", "host": ["{{baseUrl}}"], "path": ["api", "groups"] },
+            "description": "Creates a GROUP chat in one call: the backing Chat, a ChatParticipant row for you and every member, and the Group + GroupMember rows (you become `ADMIN`, everyone else `MEMBER`).\n\nRun **Users → Search Users** first to populate `{{otherUserId}}`, or edit the body to list multiple ids directly.\n\n**Body**\n| Field | Type | Rules |\n|---|---|---|\n| `name` | string | 1-80 chars |\n| `avatarUrl` | string? | valid URL |\n| `description` | string? | max 280 chars |\n| `memberIds` | string[] | 1-256 ids; your own id is filtered out automatically if included |\n\n**Response `201`**: `GroupDTO` — `{ id, chatId, name, avatarUrl, description, createdBy, createdAt, members: [{ userId, role, joinedAt, user }] }`. Use `data.chatId` to send messages into the group (via the Chats/Messages endpoints)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set('groupId', data.id);",
+                  "  pm.collectionVariables.set('chatId', data.chatId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Group Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/groups/{{groupId}}", "host": ["{{baseUrl}}"], "path": ["api", "groups", "{{groupId}}"] },
+            "description": "Group metadata + full member list with roles. Any member (not just admins) can view this.\n\n**Response `200`**: `GroupDTO`.\n\n**Errors**: `404` if the group doesn't exist or you're not a member."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Group",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated description\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/groups/{{groupId}}", "host": ["{{baseUrl}}"], "path": ["api", "groups", "{{groupId}}"] },
+            "description": "Updates the group's name/avatar/description. **Admin only.**\n\n**Body** (send at least one, `null` clears `avatarUrl`/`description`)\n| Field | Type | Rules |\n|---|---|---|\n| `name` | string? | 1-80 chars |\n| `avatarUrl` | string \\| null | valid URL |\n| `description` | string \\| null | max 280 chars |\n\n**Response `200`**: updated `GroupDTO`.\n\n**Errors**: `403` if you're a member but not an admin."
+          },
+          "response": []
+        },
+        {
+          "name": "Add Group Members",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userIds\": [\"{{otherUserId}}\"]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/groups/{{groupId}}/members", "host": ["{{baseUrl}}"], "path": ["api", "groups", "{{groupId}}", "members"] },
+            "description": "Adds new members as `MEMBER` role. **Admin only.** IDs already in the group are silently skipped rather than erroring — safe to call with an overlapping list.\n\n**Body**: `{ userIds }` — 1-256 ids.\n\n**Response `200`**: updated `GroupDTO` (message is `\"No new members to add\"` if every id was already a member).\n\n**Errors**: `403` if not an admin; `400` if any id doesn't correspond to a real user."
+          },
+          "response": []
+        },
+        {
+          "name": "Remove Group Member",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/groups/{{groupId}}/members?userId={{otherUserId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "groups", "{{groupId}}", "members"],
+              "query": [{ "key": "userId", "value": "{{otherUserId}}", "description": "The member to remove. Pass your own userId to leave the group instead." }]
+            },
+            "description": "Removes a member from the group (deletes their GroupMember and ChatParticipant rows). Admins can remove anyone; a non-admin member can only pass their own `userId` — i.e. this doubles as \"leave group\" when `userId` equals the caller.\n\n**Response `200`**: `data: null`, message `\"Left group\"` or `\"Member removed\"` depending on who was removed.\n\n**Errors**: `403` if you try to remove someone else without being an admin; `404` if the target isn't a member."
+          },
+          "response": []
+        },
+        {
+          "name": "Disband Group",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/groups/{{groupId}}", "host": ["{{baseUrl}}"], "path": ["api", "groups", "{{groupId}}"] },
+            "description": "Permanently deletes the group: the backing Chat is removed, which cascades to Group, GroupMember, ChatParticipant, Message, and Call rows for it. **Admin only. Not reversible.**\n\n**Response `200`**: `data: null`.\n\n**Errors**: `403` if you're not an admin."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attachments",
+      "description": "File uploads for use in messages. Upload first, then reference the returned url/type/etc. in a message's `attachments[]`.",
+      "item": [
+        {
+          "name": "Upload Attachment",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [], "description": "Required. Any file up to 25MB." }
+              ]
+            },
+            "url": { "raw": "{{baseUrl}}/api/attachments", "host": ["{{baseUrl}}"], "path": ["api", "attachments"] },
+            "description": "Multipart upload — stores the file under `public/uploads/<uuid>.<ext>` and serves it statically at the returned `url`. This endpoint only stores the file and returns its metadata; it does **not** attach it to a message by itself — copy the response fields into a subsequent `POST /api/messages` call's `attachments[]` array.\n\n**Body**: `multipart/form-data` with a single field named `file`. In Postman: Body tab → `form-data` → key `file` → change the type dropdown from \"Text\" to \"File\" → choose a file.\n\n`type` in the response is inferred from the upload's MIME prefix: `image/*` → `IMAGE`, `audio/*` → `AUDIO`, `video/*` → `VIDEO`, anything else → `FILE`.\n\n**Response `201`**: `{ url, type, fileName, fileSize }`.\n\n**Errors**: `400` if the `file` field is missing or the file is empty; `413` if it exceeds 25MB."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Calls",
+      "description": "Call history logging. This is a record-keeping endpoint — the actual WebRTC audio/video signaling (offer/answer/ICE) happens over the WebSocket `call:signal`/`call:incoming` events, not REST.",
+      "item": [
+        {
+          "name": "Log Call",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chatId\": \"{{chatId}}\",\n  \"type\": \"VOICE\",\n  \"status\": \"COMPLETED\",\n  \"startedAt\": \"2026-01-01T10:00:00.000Z\",\n  \"endedAt\": \"2026-01-01T10:05:30.000Z\",\n  \"duration\": 330\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/calls", "host": ["{{baseUrl}}"], "path": ["api", "calls"] },
+            "description": "Logs a call against a chat you participate in — call this once the call ends (or is missed/declined) to record it in history.\n\n**Body**\n| Field | Type | Rules |\n|---|---|---|\n| `chatId` | string | required |\n| `type` | enum | `VOICE` \\| `VIDEO` |\n| `status` | enum | `MISSED` \\| `COMPLETED` \\| `DECLINED` |\n| `startedAt` | string? | ISO 8601 datetime, defaults to now |\n| `endedAt` | string? | ISO 8601 datetime |\n| `duration` | integer? | seconds, >= 0 |\n\n**Response `201`**: `CallDTO` — `{ id, chatId, initiatorId, initiator, type, status, startedAt, endedAt, duration }`.\n\n**Errors**: `404` if you're not a participant of `chatId`."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Call History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/calls?limit=30",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "calls"],
+              "query": [
+                { "key": "limit", "value": "30", "description": "1-100, default 30" },
+                { "key": "cursor", "value": "", "description": "A call id from a previous page's nextCursor.", "disabled": true }
+              ]
+            },
+            "description": "Call history across every chat the caller participates in, newest first, cursor-paginated.\n\n**Response `200`**: `{ calls: CallDTO[], nextCursor }`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "WebSocket Reference (docs only, no requests)",
+      "description": "The real-time layer lives in a separate process (`ws-server.js`, default `ws://localhost:8080`) — plain WebSocket, not REST, so it isn't represented as runnable Postman requests here. If your Postman version supports WebSocket requests, connect to `{{wsUrl}}` (add that variable yourself) and send JSON frames shaped `{ \"event\": string, \"data\": object }`.\n\n**Handshake**: first frame after connecting must be `{ \"event\": \"auth\", \"data\": { \"token\": \"<accessToken>\" } }` within 5 seconds, or the server closes the connection. Reuse the same access token this collection uses for REST.\n\n**Client → Server events**\n| Event | Payload | Effect |\n|---|---|---|\n| `auth` | `{ token }` | Authenticates the socket |\n| `message:send` | `{ chatId, type, text, replyToId?, attachments? }` | Same persistence as `POST /api/messages`, broadcasts `message:new` |\n| `typing:start` / `typing:stop` | `{ chatId }` | Broadcasts `typing:update` to other participants |\n| `message:read` | `{ chatId, messageId }` | Marks your receipt `SEEN`, resets your unread count |\n| `presence:ping` | `{}` | Heartbeat, updates `lastSeenAt` |\n| `call:signal` | `{ chatId, toUserId, type, payload }` | WebRTC offer/answer/ICE relay — `type: \"offer\"` reaches the callee as `call:incoming`, everything else as `call:signal` |\n\n**Server → Client events**: `auth` (handshake ack), `message:new`, `message:status` (`{ messageId, userId, status }` — `DELIVERED` when a connected recipient receives it in real time, `SEEN` after `message:read`), `message:update` (edit/delete), `typing:update`, `presence:update` (`{ userId, isOnline, lastSeenAt }`, deduplicated so you get exactly one per contact even if you share multiple chats with them), `call:incoming`, `call:signal`, `error` (`{ message, code }`).",
+      "item": []
+    }
+  ]
+}
