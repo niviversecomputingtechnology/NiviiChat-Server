@@ -177,3 +177,21 @@ export function toGroupDTO(group: GroupWithMembers) {
     }))
   };
 }
+
+export const CALL_INCLUDE = { initiator: true } as const;
+
+type CallWithInitiator = Prisma.CallGetPayload<{ include: typeof CALL_INCLUDE }>;
+
+export function toCallDTO(call: CallWithInitiator) {
+  return {
+    id: call.id,
+    chatId: call.chatId,
+    initiatorId: call.initiatorId,
+    initiator: toPublicUser(call.initiator),
+    type: call.type,
+    status: call.status,
+    startedAt: call.startedAt,
+    endedAt: call.endedAt,
+    duration: call.duration
+  };
+}
