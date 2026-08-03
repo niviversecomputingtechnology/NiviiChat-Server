@@ -153,3 +153,27 @@ export function toReactionDTO(reaction: Reaction) {
     createdAt: reaction.createdAt
   };
 }
+
+export const GROUP_INCLUDE = { members: { include: { user: true } } } as const;
+
+type GroupWithMembers = Prisma.GroupGetPayload<{
+  include: typeof GROUP_INCLUDE;
+}>;
+
+export function toGroupDTO(group: GroupWithMembers) {
+  return {
+    id: group.id,
+    chatId: group.chatId,
+    name: group.name,
+    avatarUrl: group.avatarUrl,
+    description: group.description,
+    createdBy: group.createdBy,
+    createdAt: group.createdAt,
+    members: group.members.map((m) => ({
+      userId: m.userId,
+      role: m.role,
+      joinedAt: m.joinedAt,
+      user: toPublicUser(m.user)
+    }))
+  };
+}
