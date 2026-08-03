@@ -7,6 +7,8 @@ import authPlugin from "./plugins/auth";
 import errorHandlerPlugin from "./plugins/error-handler";
 import authRoutes from "./routes/auth";
 import userRoutes from "./routes/users";
+import chatRoutes from "./routes/chats";
+import messageRoutes from "./routes/messages";
 import { prisma } from "./lib/prisma";
 
 const PORT = Number(process.env.API_PORT || 3000);
@@ -39,9 +41,11 @@ async function main() {
 
   await fastify.register(authRoutes, { prefix: "/api/auth" });
   await fastify.register(userRoutes, { prefix: "/api/users" });
+  await fastify.register(chatRoutes, { prefix: "/api/chats" });
+  await fastify.register(messageRoutes, { prefix: "/api/messages" });
 
   // Remaining resource route plugins register themselves here checkpoint by
-  // checkpoint (chats/messages, then groups/attachments/calls).
+  // checkpoint (groups/attachments/calls).
 
   await fastify.listen({ port: PORT, host: HOST });
 }
