@@ -15,7 +15,7 @@ const attachmentInputSchema = z.object({
   width: z.number().int().optional(),
   height: z.number().int().optional(),
   duration: z.number().int().optional(),
-  waveform: z.unknown().optional(),
+  waveform: z.any().optional(), // arbitrary JSON; Prisma's Json input type won't accept `unknown`
   thumbnail: z.string().url().optional()
 });
 

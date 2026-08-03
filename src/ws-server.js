@@ -80,6 +80,52 @@ async function broadcastToChat(chatId, event, data, opts = {}) {
   }
 }
 
+/** A message is SENT the moment it's persisted; it becomes DELIVERED for
+ * whichever recipients are currently connected (they just received
+ * message:new in real time), and SEEN once the recipient's client sends
+ * message:read. Recipients with no open socket stay SENT until they
+ * reconnect and catch up via GET /api/chats/[id]. */
+async function markDelivered(chatId, messageId, excludeUserId) {
+  const participantIds = await chatParticipantIds(chatId);
+  for (const userId of participantIds) {
+    if (userId === excludeUserId || !connectionsByUser.has(userId)) continue;
+
+    const updated = await prisma.messageReceipt.updateMany({
+      where: { messageId, userId, status: "SENT" },
+      data: { status: "DELIVERED" }
+    });
+    if (updated.count > 0) {
+      await broadcastToChat(
+        chatId,
+        "message:status",
+        { messageId, userId, status: "DELIVERED" },
+        { excludeUserId: userId }
+      );
+    }
+  }
+}
+
+/** Broadcasts once per distinct recipient across every chat a user
+ * participates in — used for presence, where the same counterpart can
+ * share more than one chat (e.g. a DIRECT chat and a GROUP chat) and must
+ * not receive the same presence:update twice. */
+async function broadcastToAllContactsOf(userId, event, data) {
+  const ownChats = await prisma.chatParticipant.findMany({
+    where: { userId },
+    select: { chatId: true }
+  });
+  const rows = await prisma.chatParticipant.findMany({
+    where: { chatId: { in: ownChats.map((c) => c.chatId) } },
+    select: { userId: true }
+  });
+
+  const recipientIds = new Set(rows.map((r) => r.userId));
+  recipientIds.delete(userId);
+  for (const recipientId of recipientIds) {
+    sendToUser(recipientId, event, data);
+  }
+}
+
 function toPublicUser(user) {
   return {
     id: user.id,
@@ -148,18 +194,11 @@ async function handleAuth(ws, data) {
       where: { id: ws.userId },
       data: { isOnline: true }
     });
-    const participantChats = await prisma.chatParticipant.findMany({
-      where: { userId: ws.userId },
-      select: { chatId: true }
+    await broadcastToAllContactsOf(user.id, "presence:update", {
+      userId: user.id,
+      isOnline: true,
+      lastSeenAt: user.lastSeenAt
     });
-    for (const { chatId } of participantChats) {
-      await broadcastToChat(
-        chatId,
-        "presence:update",
-        { userId: user.id, isOnline: true, lastSeenAt: user.lastSeenAt },
-        { excludeUserId: user.id }
-      );
-    }
   }
 
   send(ws, "auth", { ok: true, userId: ws.userId });
@@ -219,6 +258,7 @@ async function handleMessageSend(ws, data) {
   const dto = toMessageDTO(message);
   // Fan out to every participant, including the sender's other devices.
   await broadcastToChat(chatId, "message:new", dto);
+  await markDelivered(chatId, message.id, ws.userId);
 }
 
 // --- typing:start / typing:stop ---
@@ -336,6 +376,9 @@ const server = http.createServer((req, res) => {
         const { event, payload } = JSON.parse(body);
         if (payload && payload.chatId) {
           await broadcastToChat(payload.chatId, event, payload);
+          if (event === "message:new" && payload.id) {
+            await markDelivered(payload.chatId, payload.id, payload.senderId);
+          }
         }
         res.writeHead(204).end();
       } catch (err) {
@@ -390,18 +433,11 @@ wss.on("connection", (ws) => {
       where: { id: ws.userId },
       data: { isOnline: false, lastSeenAt: new Date() }
     });
-    const participantChats = await prisma.chatParticipant.findMany({
-      where: { userId: ws.userId },
-      select: { chatId: true }
+    await broadcastToAllContactsOf(user.id, "presence:update", {
+      userId: user.id,
+      isOnline: false,
+      lastSeenAt: user.lastSeenAt
     });
-    for (const { chatId } of participantChats) {
-      await broadcastToChat(
-        chatId,
-        "presence:update",
-        { userId: user.id, isOnline: false, lastSeenAt: user.lastSeenAt },
-        { excludeUserId: user.id }
-      );
-    }
   });
 });
 

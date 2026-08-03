@@ -36,6 +36,45 @@ docker compose logs -f api ws
 docker compose down      # keeps the pgdata volume
 ```
 
+## API reference
+
+All routes are mounted under `/api`, require `Authorization: Bearer <accessToken>` unless
+noted, and return the envelope in `src/lib/response.ts`
+(`{ status, message, data, app_version }` / `{ status:false, message, error, trace_id }`).
+List endpoints are cursor-paginated (`?cursor=&limit=`).
+
+| Method | Route | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/auth/register` | ❌ | Create account |
+| POST | `/api/auth/login` | ❌ | `{ accessToken, refreshToken, user }` |
+| POST | `/api/auth/refresh-token` | refresh token | Rotate refresh token, mint new access token |
+| POST | `/api/auth/logout` | ✅ | Revoke a refresh token |
+| GET/PATCH | `/api/users/me` | ✅ | Current profile |
+| GET | `/api/users?query=` | ✅ | Search users |
+| GET | `/api/users/[id]` | ✅ | Public profile lookup |
+| GET/POST | `/api/chats` | ✅ | List chats / create-or-get a direct chat |
+| GET/PATCH/DELETE | `/api/chats/[id]` | ✅ | Detail + paginated messages / pin-mute-archive / leave |
+| POST | `/api/messages` | ✅ | Send (also broadcasts `message:new` over WS) |
+| GET/PATCH/DELETE | `/api/messages/[id]` | ✅ | Detail / edit-delete-receipt-status / soft-delete |
+| POST | `/api/groups` | ✅ | Create group |
+| GET/PATCH/DELETE | `/api/groups/[id]` | ✅ | Detail / update (admin) / disband (admin) |
+| POST/DELETE | `/api/groups/[id]/members` | ✅ | Add (admin) / remove (admin, or self-leave) |
+| POST | `/api/attachments` | ✅ | Multipart upload, returns `{ url, type, fileName, fileSize }` |
+| GET/POST | `/api/calls` | ✅ | History / log a call |
+
+## WebSocket events (`ws-server.js`, port 8080)
+
+First message after connecting must be `{ event: "auth", data: { token } }` within 5s.
+
+| Client → Server | Server → Client |
+|---|---|
+| `auth` | `auth` (ack) |
+| `message:send` | `message:new` |
+| `typing:start` / `typing:stop` | `typing:update` |
+| `message:read` | `message:status`, `presence:update` |
+| `presence:ping` | `message:update` (edit/delete, extends the documented set) |
+| `call:signal` | `call:incoming` / `call:signal`, `error` |
+
 ## Project structure
 
 ```
@@ -64,8 +103,10 @@ merged into `main` after every checkpoint. See git log / branches for the build 
 
 ## Definition of Done
 
-- [ ] `docker compose up` brings up Postgres + migrated schema + seeded data + API (3000) + WS (8080) with no manual steps.
-- [ ] `/api/auth/login` issues a working session against real (seeded) users.
-- [ ] `/api/chats` returns data shaped exactly like the client's `ChatListItem[]`.
-- [ ] A message sent via `message:send` over WS is persisted, appears via `message:new` on a second client, and shows `sent` → `delivered` → `seen` transitions.
-- [ ] Typing indicators and online/last-seen presence work over WS.
+Verified end-to-end against the real `docker compose up` stack (Postgres 16 + migrate + api + ws):
+
+- [x] `docker compose up` brings up Postgres + migrated schema + seeded data + API (3000) + WS (8080) with no manual steps.
+- [x] `/api/auth/login` issues a working session against real (seeded) users.
+- [x] `/api/chats` returns data shaped exactly like the client's `ChatListItem[]`.
+- [x] A message sent via `message:send` over WS is persisted, appears via `message:new` on a second client, and its receipt transitions `SENT` → `SEEN` via `message:read` / `message:status`.
+- [x] Typing indicators (`typing:start` → `typing:update`) and online/last-seen presence (`presence:update` on connect/disconnect, deduplicated across shared chats) work over WS.

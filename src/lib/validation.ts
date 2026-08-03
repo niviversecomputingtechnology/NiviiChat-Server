@@ -1,8 +1,12 @@
 import { NextRequest } from "next/server";
-import { ZodSchema, ZodError } from "zod";
+import { ZodError, ZodType, ZodTypeDef } from "zod";
 import { ApiError } from "./errors";
 
-export async function parseJsonBody<T>(req: NextRequest, schema: ZodSchema<T>): Promise<T> {
+// ZodType<T, ZodTypeDef, any> (rather than ZodSchema<T>, which pins input=T
+// too) is required so schemas that transform/coerce — where the parsed
+// input shape differs from the output shape, e.g. query strings coerced to
+// numbers/booleans — still type-check when passed in here.
+export async function parseJsonBody<T>(req: NextRequest, schema: ZodType<T, ZodTypeDef, any>): Promise<T> {
   let raw: unknown;
   try {
     raw = await req.json();
@@ -17,7 +21,7 @@ export async function parseJsonBody<T>(req: NextRequest, schema: ZodSchema<T>): 
   return result.data;
 }
 
-export function parseQuery<T>(req: NextRequest, schema: ZodSchema<T>): T {
+export function parseQuery<T>(req: NextRequest, schema: ZodType<T, ZodTypeDef, any>): T {
   const params = Object.fromEntries(req.nextUrl.searchParams.entries());
   const result = schema.safeParse(params);
   if (!result.success) {
