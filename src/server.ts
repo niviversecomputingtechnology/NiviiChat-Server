@@ -5,6 +5,8 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import authPlugin from "./plugins/auth";
 import errorHandlerPlugin from "./plugins/error-handler";
+import authRoutes from "./routes/auth";
+import userRoutes from "./routes/users";
 import { prisma } from "./lib/prisma";
 
 const PORT = Number(process.env.API_PORT || 3000);
@@ -35,8 +37,11 @@ async function main() {
 
   fastify.get("/", async () => ({ ok: true, service: "nivichat-backend" }));
 
-  // Resource route plugins register themselves here checkpoint by
-  // checkpoint (auth/users, then chats/messages, then groups/attachments/calls).
+  await fastify.register(authRoutes, { prefix: "/api/auth" });
+  await fastify.register(userRoutes, { prefix: "/api/users" });
+
+  // Remaining resource route plugins register themselves here checkpoint by
+  // checkpoint (chats/messages, then groups/attachments/calls).
 
   await fastify.listen({ port: PORT, host: HOST });
 }
