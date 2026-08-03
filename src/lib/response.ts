@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import type { FastifyReply } from "fastify";
 
 const APP_VERSION = process.env.APP_VERSION ?? "0.0.0";
 
@@ -16,24 +16,26 @@ export interface ErrorBody {
   trace_id?: string;
 }
 
-export function buildSuccess<T>(data: T, message = "OK", status = 200): NextResponse<SuccessBody<T>> {
-  return NextResponse.json(
-    { status: true, message, data, app_version: APP_VERSION },
-    { status }
-  );
+export function sendSuccess<T>(
+  reply: FastifyReply,
+  data: T,
+  message = "OK",
+  statusCode = 200
+): FastifyReply {
+  const body: SuccessBody<T> = { status: true, message, data, app_version: APP_VERSION };
+  return reply.code(statusCode).send(body);
 }
 
-export function buildError(
+export function sendError(
+  reply: FastifyReply,
   message: string,
   opts?: { status?: number; error?: unknown; traceId?: string }
-): NextResponse<ErrorBody> {
-  return NextResponse.json(
-    {
-      status: false,
-      message,
-      error: opts?.error ?? null,
-      trace_id: opts?.traceId
-    },
-    { status: opts?.status ?? 400 }
-  );
+): FastifyReply {
+  const body: ErrorBody = {
+    status: false,
+    message,
+    error: opts?.error ?? null,
+    trace_id: opts?.traceId
+  };
+  return reply.code(opts?.status ?? 400).send(body);
 }

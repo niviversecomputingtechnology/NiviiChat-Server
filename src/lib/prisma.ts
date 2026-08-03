@@ -1,16 +1,10 @@
 import { PrismaClient } from "@prisma/client";
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __prisma: PrismaClient | undefined;
-}
-
-export const prisma =
-  global.__prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
-  });
-
-if (process.env.NODE_ENV !== "production") {
-  global.__prisma = prisma;
-}
+// A plain singleton is enough here: unlike Next.js dev mode (which
+// re-evaluates route modules on every request and would otherwise spawn a
+// new PrismaClient each time), this is one long-running Fastify process —
+// `tsx watch` restarts the whole process on change rather than re-importing
+// modules within it.
+export const prisma = new PrismaClient({
+  log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
+});
