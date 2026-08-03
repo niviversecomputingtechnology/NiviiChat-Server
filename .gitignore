@@ -1,10 +1,8 @@
 # dependencies
 node_modules/
 
-# next.js
-.next/
-out/
-build/
+# build output
+dist/
 
 # env
 .env
@@ -26,7 +24,6 @@ Thumbs.db
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # uploaded attachments (persisted via a Docker volume, not committed)
 public/uploads/*
