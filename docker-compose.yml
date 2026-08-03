@@ -28,7 +28,7 @@ services:
 
   api:
     build: .
-    command: npm run start # next start, port 3000
+    command: npm run start # node dist/server.js (Fastify), port 3000
     env_file: .env
     ports:
       - "3000:3000"
