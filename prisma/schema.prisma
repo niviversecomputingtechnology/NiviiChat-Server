@@ -1,0 +1,250 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ChatType {
+  DIRECT
+  GROUP
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  AUDIO
+  FILE
+  VIDEO
+  VIDEO_CALL
+  VOICE_CALL
+}
+
+enum MessageStatus {
+  SENDING
+  SENT
+  DELIVERED
+  SEEN
+  READ
+  MISSED
+}
+
+enum AttachmentType {
+  IMAGE
+  AUDIO
+  FILE
+  VIDEO
+}
+
+enum CallType {
+  VOICE
+  VIDEO
+}
+
+enum CallStatus {
+  MISSED
+  COMPLETED
+  DECLINED
+}
+
+enum GroupRole {
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id             String    @id @default(cuid())
+  username       String    @unique
+  email          String    @unique
+  passwordHash   String
+  name           String
+  avatarUrl      String?
+  bio            String?
+  isVerified     Boolean   @default(false)
+  isOnline       Boolean   @default(false)
+  lastSeenAt     DateTime?
+  deviceUniqueId String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  participants     ChatParticipant[]
+  messagesSent     Message[]       @relation("MessageSender")
+  reactions        Reaction[]
+  refreshTokens    RefreshToken[]
+  deviceTokens     DeviceToken[]
+  groupMemberships GroupMember[]
+  callsInitiated   Call[]          @relation("CallInitiator")
+  blockedByMe      BlockedUser[]   @relation("Blocker")
+  blockedMe        BlockedUser[]   @relation("Blocked")
+  messageReceipts  MessageReceipt[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model DeviceToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  platform  String // "ios" | "android"
+  createdAt DateTime @default(now())
+}
+
+model Chat {
+  id        String   @id @default(cuid())
+  type      ChatType
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  participants ChatParticipant[]
+  messages     Message[]
+  group        Group?
+  calls        Call[]
+}
+
+// Per-user view of a chat — carries pin/mute/archive/unread exactly as
+// consumed by BaseChat in src/Modules/Tab/Chats/type.ts
+model ChatParticipant {
+  id     String @id @default(cuid())
+  chatId String
+  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  isPinned    Boolean   @default(false)
+  isMuted     Boolean   @default(false)
+  isArchived  Boolean   @default(false)
+  unreadCount Int       @default(0)
+  lastReadAt  DateTime?
+
+  joinedAt DateTime @default(now())
+
+  @@unique([chatId, userId])
+}
+
+model Group {
+  id          String   @id @default(cuid())
+  chatId      String   @unique
+  chat        Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  name        String
+  avatarUrl   String?
+  description String?
+  createdBy   String
+  createdAt   DateTime @default(now())
+
+  members GroupMember[]
+}
+
+model GroupMember {
+  id       String    @id @default(cuid())
+  groupId  String
+  group    Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     GroupRole @default(MEMBER)
+  joinedAt DateTime  @default(now())
+
+  @@unique([groupId, userId])
+}
+
+model Message {
+  id       String @id @default(cuid())
+  chatId   String
+  chat     Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  senderId String
+  sender   User   @relation("MessageSender", fields: [senderId], references: [id])
+
+  type MessageType @default(TEXT)
+  text String?
+
+  replyToId String?
+  replyTo   Message?  @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies   Message[] @relation("MessageReplies")
+
+  isEdited  Boolean   @default(false)
+  editedAt  DateTime?
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  attachments Attachment[]
+  reactions   Reaction[]
+  receipts    MessageReceipt[]
+
+  @@index([chatId, createdAt])
+}
+
+// Per-recipient delivery status — supports group read receipts, not just 1:1
+model MessageReceipt {
+  id        String        @id @default(cuid())
+  messageId String
+  message   Message       @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    MessageStatus @default(SENT)
+  updatedAt DateTime      @updatedAt
+
+  @@unique([messageId, userId])
+}
+
+model Attachment {
+  id        String         @id @default(cuid())
+  messageId String
+  message   Message        @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  type      AttachmentType
+  url       String
+  fileName  String?
+  fileSize  String?
+  width     Int?
+  height    Int?
+  duration  Int?
+  waveform  Json?
+  thumbnail String?
+}
+
+model Reaction {
+  id        String   @id @default(cuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId])
+}
+
+model Call {
+  id          String     @id @default(cuid())
+  chatId      String
+  chat        Chat       @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  initiatorId String
+  initiator   User       @relation("CallInitiator", fields: [initiatorId], references: [id])
+  type        CallType
+  status      CallStatus
+  startedAt   DateTime   @default(now())
+  endedAt     DateTime?
+  duration    Int?
+}
+
+model BlockedUser {
+  id        String   @id @default(cuid())
+  blockerId String
+  blocker   User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+}
