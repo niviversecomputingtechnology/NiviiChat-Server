@@ -27,3 +27,7 @@ Thumbs.db
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# uploaded attachments (persisted via a Docker volume, not committed)
+public/uploads/*
+!public/uploads/.gitkeep
