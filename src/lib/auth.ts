@@ -8,7 +8,14 @@ const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET ?? "";
 const ACCESS_EXPIRES_IN = process.env.JWT_ACCESS_EXPIRES_IN ?? "5m";
 const REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN ?? "30d";
 
-if (process.env.NODE_ENV === "production" && (!ACCESS_SECRET || !REFRESH_SECRET)) {
+// NEXT_PHASE is "phase-production-build" during `next build`, when secrets
+// aren't necessarily injected yet (e.g. the Docker build stage) — only
+// enforce this once the app is actually serving traffic.
+if (
+  process.env.NODE_ENV === "production" &&
+  process.env.NEXT_PHASE !== "phase-production-build" &&
+  (!ACCESS_SECRET || !REFRESH_SECRET)
+) {
   throw new Error("JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be set");
 }
 
