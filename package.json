@@ -24,6 +24,7 @@
   "dependencies": {
     "@prisma/client": "^5.19.1",
     "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
     "jsonwebtoken": "^9.0.2",
     "next": "^14.2.15",
     "react": "^18.3.1",
@@ -41,7 +42,6 @@
     "@types/react": "^18.3.11",
     "@types/uuid": "^9.0.8",
     "@types/ws": "^8.5.12",
-    "dotenv": "^16.4.5",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.15",
     "husky": "^9.1.6",
