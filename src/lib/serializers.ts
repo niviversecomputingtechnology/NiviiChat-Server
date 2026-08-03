@@ -91,8 +91,10 @@ export function toChatHeader(
   };
 }
 
+export const MESSAGE_INCLUDE = { attachments: true, sender: true, reactions: true } as const;
+
 type MessageWithRelations = Prisma.MessageGetPayload<{
-  include: { attachments: true; sender: true; reactions: true };
+  include: typeof MESSAGE_INCLUDE;
 }>;
 
 export function toMessageSummary(message: MessageWithRelations) {
